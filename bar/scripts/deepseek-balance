@@ -8,92 +8,47 @@
 # belongs to the widget, so this script always fetches. The cache is only the
 # offline fallback for when the API cannot be reached.
 #
-# Display currency: the contents of ~/.config/omarchy/bar/deepseek-currency
-# ("EUR"); anything else, or no file, means USD. If the account holds the
-# display currency the exact figure is shown; otherwise the primary balance is
-# converted with a cached ECB rate (frankfurter.dev, no API key needed).
-#
 # API key: $DEEPSEEK_API_KEY, else ~/.config/omarchy/bar/deepseek-key (mode 600).
 
 set -u
 
 KEY_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/bar/deepseek-key"
-CUR_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/bar/deepseek-currency"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy"
-FX_TTL=43200                                 # seconds; ECB rate cache (12h)
+CACHE_FILE="$CACHE_DIR/deepseek-balance.json"
 API_URL="https://api.deepseek.com/user/balance"
-
-TARGET=""
-[ -f "$CUR_FILE" ] && TARGET=$(tr -d '[:space:]' < "$CUR_FILE" | tr '[:lower:]' '[:upper:]')
-case "$TARGET" in EUR) ;; *) TARGET=USD ;; esac
-CACHE_FILE="$CACHE_DIR/deepseek-balance-$TARGET.json"
-
-symbol() { [ "$1" = EUR ] && printf '€' || printf '$'; }
-
-# Echoes a file's age in seconds, or a huge number when it does not exist.
-age() { [ -f "$1" ] || { printf '999999999'; return; }; printf '%s' "$(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || printf 0) ))"; }
-
-# from to -> rate on stdout (cached, falls back to a stale rate offline).
-fx_rate() {
-  local from="$1" to="$2" file rate
-  file="$CACHE_DIR/fx-$from-$to.txt"
-  if [ "$(age "$file")" -lt "$FX_TTL" ]; then cat "$file"; return 0; fi
-  rate=$(curl -sS --max-time 8 "https://api.frankfurter.dev/v1/latest?base=$from&symbols=$to" \
-    | jq -r ".rates.$to // empty" 2>/dev/null)
-  if [ -z "$rate" ]; then [ -f "$file" ] && { cat "$file"; return 0; }; return 1; fi
-  mkdir -p "$CACHE_DIR"; printf '%s' "$rate" > "$file"; printf '%s' "$rate"
-}
-
-# Convert an amount by a rate, 2-decimal.
-mul() { awk -v a="$1" -v r="$2" 'BEGIN{printf "%.2f", a*r}'; }
 
 fetch_and_format() {
   local key="$1" raw
   raw=$(curl -sS --max-time 8 -H "Accept: application/json" \
         -H "Authorization: Bearer $key" "$API_URL") || return 1
 
-  # Prefer the entry in the display currency, else the account's primary one.
-  local cur amt granted topped
-  IFS=$'\t' read -r cur amt granted topped < <(
-    printf '%s' "$raw" | jq -r --arg t "$TARGET" '
-      (.balance_infos[] | select(.currency == $t)) // .balance_infos[0]
-      | [.currency, .total_balance, .granted_balance, .topped_up_balance] | @tsv' 2>/dev/null)
+  local amt granted topped
+  IFS=$'\t' read -r amt granted topped < <(
+    printf '%s' "$raw" | jq -r '
+      .balance_infos[0] | [.total_balance, .granted_balance, .topped_up_balance] | @tsv' 2>/dev/null)
 
-  if [ -z "${cur:-}" ]; then
+  if [ -z "${amt:-}" ]; then
     local msg
     msg=$(printf '%s' "$raw" | jq -r '.error.message // empty' 2>/dev/null)
     printf '{"text":"⧗","tooltip":"DeepSeek: %s"}' "${msg:-unexpected response}"
     return 2
   fi
 
-  local src_cur="" rate="" converted=0
-  if [ "$cur" != "$TARGET" ]; then
-    rate=$(fx_rate "$cur" "$TARGET" || true)
-    if [ -n "$rate" ]; then
-      src_cur="$cur"; converted=1
-      amt=$(mul "$amt" "$rate"); granted=$(mul "$granted" "$rate"); topped=$(mul "$topped" "$rate")
-      cur="$TARGET"
-    fi
-  fi
-
-  local sym tooltip
-  sym=$(symbol "$cur")
+  local tooltip
   # "Granted" is DeepSeek's free promotional credit (expires). With none, the
   # total and the topped-up balance are the same number, so show one line;
   # break it down only when there is grant to account for.
   if [ -n "$granted" ] && awk -v g="$granted" 'BEGIN{exit !(g+0>0)}'; then
     tooltip="DeepSeek balance
-Total: $sym$amt
-Granted: $sym$granted
-Topped up: $sym$topped"
+Total: \$$amt
+Granted: \$$granted
+Topped up: \$$topped"
   else
     tooltip="DeepSeek balance
-Balance: $sym$amt"
+Balance: \$$amt"
   fi
-  [ "$converted" -eq 1 ] && tooltip="$tooltip
-(converted at 1 $src_cur = $rate $cur)"
   # One line: the bar's parser reads only the last line of the output.
-  jq -nc --arg text "$sym$amt" --arg tooltip "$tooltip" '{text:$text, tooltip:$tooltip}'
+  jq -nc --arg text "\$$amt" --arg tooltip "$tooltip" '{text:$text, tooltip:$tooltip}'
 }
 
 # ---- main ----
@@ -105,7 +60,7 @@ elif [ -f "$KEY_FILE" ]; then
 fi
 
 if [ -z "$key" ]; then
-  printf '{"text":"%s—","tooltip":"DeepSeek: set API key in %s"}' "$(symbol "$TARGET")" "$KEY_FILE"
+  printf '{"text":"$—","tooltip":"DeepSeek: set API key in %s"}' "$KEY_FILE"
   exit 3
 fi
 
