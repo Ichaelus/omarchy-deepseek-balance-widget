@@ -1,0 +1,5 @@
+# Never commit the API key. It normally lives outside the repo at
+# ~/.config/omarchy/bar/deepseek-key, but keep these in case one is dropped in.
+deepseek-key
+.env
+*.local
