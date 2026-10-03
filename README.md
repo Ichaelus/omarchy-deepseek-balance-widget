@@ -22,7 +22,6 @@ are what the shell loads. Then add the module to `~/.config/omarchy/shell.json`
 {
   "id": "deepseek-balance",
   "type": "qml",
-  "interval": 1800,
   "onClick": "xdg-open https://platform.deepseek.com/usage"
 }
 ```
@@ -74,9 +73,22 @@ Topped up: $5.94
 
 ## Refresh
 
-The timer refreshes on the configured interval, and hovering refreshes again
-(debounced, so hovering repeatedly does not hammer the API). An open tooltip is
-re-rendered with whatever the refresh returned.
+Polling backs off while the balance holds still:
+
+| Balance since the last fetch | Next refresh |
+| --- | --- |
+| changed | 5 min |
+| unchanged | 10, 15, 20, 25, then 30 min |
+
+A change resets the interval to 5 minutes; 30 minutes is the ceiling. Hovering
+refreshes immediately, and an open tooltip is re-rendered with what that fetch
+returned. Hover refreshes are debounced so that hovering repeatedly cannot
+hammer the API, and they count for the backoff like any other fetch.
+
+A 5-minute floor is up to 288 requests in an active day, against 48 at the
+ceiling. The floor only applies while the balance is actually moving.
+
+The interval lives in memory, so restarting the shell starts at 5 minutes.
 
 ## Requirements
 

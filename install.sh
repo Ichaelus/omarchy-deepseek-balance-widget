@@ -35,7 +35,6 @@ Next: make sure the bar has the module. Add this to the right section of
   {
     "id": "deepseek-balance",
     "type": "qml",
-    "interval": 1800,
     "onClick": "xdg-open https://platform.deepseek.com/usage"
   }
 

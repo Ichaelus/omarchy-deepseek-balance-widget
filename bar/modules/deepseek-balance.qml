@@ -5,17 +5,20 @@ import qs.Commons
 import qs.Ui
 
 // DeepSeek account balance pill. Rendering, hover tooltip and click handling
-// come from the shared WidgetButton; this file owns only the fetching: a timer
-// refreshes on the configured interval, hover refreshes again (debounced), and
-// an open tooltip is re-rendered with the figure that refresh returned.
+// come from the shared WidgetButton; this file owns only the fetching.
+//
+// Polling backs off while the balance holds still: a new figure resets the
+// interval to the floor, and each unchanged one adds a step, up to the ceiling.
 BarWidget {
   id: root
   moduleName: "deepseek-balance"
 
   readonly property string scriptPath: setting("exec", "~/.config/omarchy/bar/scripts/deepseek-balance")
-  readonly property int refreshMs: Math.max(60, Number(setting("interval", 1800))) * 1000
+  readonly property int stepMs: 5 * 60 * 1000      // the floor, and the step size
+  readonly property int maxMs: 30 * 60 * 1000      // the ceiling
   readonly property int hoverRefreshMs: Number(setting("hoverRefreshMs", 60000))
 
+  property int refreshMs: stepMs
   property string outputText: ""
   property string outputTooltip: ""
   property double lastFetchMs: 0
@@ -24,11 +27,14 @@ BarWidget {
     var data = Util.parseModuleJson(raw)
     var nextText = data.text ? String(data.text) : ""
     var nextTip = data.tooltip ? String(data.tooltip) : "DeepSeek balance"
-    var changed = nextText !== outputText || nextTip !== outputTooltip
+    var moved = nextText !== outputText
+    var redraw = moved || nextTip !== outputTooltip
     if (nextText) outputText = nextText
     outputTooltip = nextTip
     lastFetchMs = Date.now()
-    if (changed && button.tooltipHovered) bar.showTooltip(button, outputTooltip)
+
+    refreshMs = moved ? stepMs : Math.min(refreshMs + stepMs, maxMs)
+    if (redraw && button.tooltipHovered) bar.showTooltip(button, outputTooltip)
   }
 
   function fetch() {
